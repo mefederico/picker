@@ -4,12 +4,13 @@ from slack_bolt.adapter.flask import SlackRequestHandler
 from flask import Flask, request, jsonify
 import os
 import json
-import psycopg2
-from urllib.parse import urlparse
 from dotenv import load_dotenv, find_dotenv
-
+from db_manager import DatabaseManager
+import random
 
 load_dotenv(find_dotenv())
+
+db = DatabaseManager()
 
 SLACK_SIGNING_SECRET = os.getenv('SLACK_SIGNING_SECRET')
 SLACK_BOT_TOKEN = os.getenv('SLACK_BOT_TOKEN')
@@ -21,23 +22,6 @@ app = App(token=SLACK_BOT_TOKEN, signing_secret=SLACK_SIGNING_SECRET)
 
 
 handler = SlackRequestHandler(app)
-
-result = urlparse(PSQL_URL)
-
-conn = psycopg2.connect(
-    dbname=result.path[1:],  # Skip the leading '/'
-    user=result.username,
-    password=result.password,
-    host=result.hostname,
-    port=result.port
-)
-
-cur = conn.cursor()
-cur.execute("SELECT version();")
-result = cur.fetchone()
-
-cur.close()
-conn.close()
 
 # listen fur user mentoining the slack app
 @app.event("app_mention")
@@ -109,6 +93,35 @@ def pricing_command(ack, say, body, logger, client):
     except Exception as e:
         logger.error(f"Error Handling hactionId-0 {e}")
 
+@app.command("/medi-pr-test")
+def medi_pr_test_command(ack, say, body, command, logger, client):
+    ack()
+    try:
+        text = command.get('text', '').strip()
+        if not text.startswith('cr '):
+            say('Usage: /medi-pr-test cr <link>')
+            return
+        link = text[3:].strip()
+        channel_id = body['channel_id']
+        # Fetch users in the channel
+        members_resp = client.conversations_members(channel='C03GLBY2B41')
+        members = members_resp.get('members', [])
+        # Remove the bot itself from the list
+        bot_user_id = os.getenv('SLACK_BOT_USER_ID')
+        members = [m for m in members if m != bot_user_id]
+        if len(members) < 2:
+            say('Not enough users in the channel to assign reviewers.')
+            return
+        reviewers = random.sample(members, 2)
+        # Optionally, fetch user info for display names
+        reviewer_names = []
+        for user_id in reviewers:
+            user_info = client.users_info(user=user_id)
+            reviewer_names.append(f"<{user_id}>")
+        say(f"Pull request: {link}\nReviewers: {', '.join(reviewer_names)}")
+    except Exception as e:
+        logger.error(f"Error in /medi-pr-test: {e}")
+        say('An error occurred while processing the command.')
 
 if __name__ == "__main__":
     flask_app.run(host="0.0.0.0", port=5000)
