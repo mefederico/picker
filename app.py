@@ -4,6 +4,8 @@ from slack_bolt.adapter.flask import SlackRequestHandler
 from flask import Flask, request, jsonify
 import os
 import json
+import psycopg2
+from urllib.parse import urlparse
 from dotenv import load_dotenv, find_dotenv
 
 
@@ -12,6 +14,7 @@ load_dotenv(find_dotenv())
 SLACK_SIGNING_SECRET = os.getenv('SLACK_SIGNING_SECRET')
 SLACK_BOT_TOKEN = os.getenv('SLACK_BOT_TOKEN')
 SLACK_BOT_USER_ID = os.getenv('SLACK_BOT_USER_ID')
+PSQL_URL = os.getenv('DATABASE_URL')
 
 flask_app = Flask(__name__)
 app = App(token=SLACK_BOT_TOKEN, signing_secret=SLACK_SIGNING_SECRET)
@@ -19,6 +22,22 @@ app = App(token=SLACK_BOT_TOKEN, signing_secret=SLACK_SIGNING_SECRET)
 
 handler = SlackRequestHandler(app)
 
+result = urlparse(psql_url)
+
+conn = psycopg2.connect(
+    dbname=result.path[1:],  # Skip the leading '/'
+    user=result.username,
+    password=result.password,
+    host=result.hostname,
+    port=result.port
+)
+
+cur = conn.cursor()
+cur.execute("SELECT version();")
+print(cur.fetchone())
+
+cur.close()
+conn.close()
 
 # listen fur user mentoining the slack app
 @app.event("app_mention")
