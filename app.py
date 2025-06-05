@@ -34,7 +34,8 @@ conn = psycopg2.connect(
 
 cur = conn.cursor()
 cur.execute("SELECT version();")
-print(cur.fetchone())
+result = cur.fetchone()
+print(result)
 
 cur.close()
 conn.close()
@@ -59,6 +60,8 @@ def slack_events():
 def pricing_command(ack, say, body,  command, logger, client):
     ack()
     trigger_id = body['trigger_id']
+    logger.info("Hola")
+    logger.info("db" + result)
     try:
         with open('command_example.json') as file:      
             json_data = json.load(file)
