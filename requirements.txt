@@ -1,4 +1,5 @@
-Flask==3.0.3
-slack-bolt==1.19.1
-slack-sdk==3.31.0
-python-dotenv==1.0.1
+Flask==3.1.1
+slack-bolt==1.23.0
+slack-sdk==3.35.0
+python-dotenv==1.1.0
+psycopg2-binary==2.9.9

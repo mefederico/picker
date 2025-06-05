@@ -22,7 +22,7 @@ app = App(token=SLACK_BOT_TOKEN, signing_secret=SLACK_SIGNING_SECRET)
 
 handler = SlackRequestHandler(app)
 
-result = urlparse(psql_url)
+result = urlparse(PSQL_URL)
 
 conn = psycopg2.connect(
     dbname=result.path[1:],  # Skip the leading '/'
