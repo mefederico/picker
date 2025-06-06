@@ -29,32 +29,18 @@ handler = SlackRequestHandler(app)
 
 def verify_github_signature(payload_body, signature_header):
     """Verify that the payload was sent from GitHub by validating SHA256."""
-    print(f"🔍 GitHub Signature Verification Debug:")
-    print(f"   - Signature header received: {signature_header}")
-    print(f"   - Signature header type: {type(signature_header)}")
-    print(f"   - Payload body type: {type(payload_body)}")
-    print(f"   - Payload body length: {len(payload_body) if payload_body else 'None'}")
-    print(f"   - GITHUB_WEBHOOK_SECRET configured: {bool(GITHUB_WEBHOOK_SECRET)}")
-    
     if not signature_header:
-        print("   ❌ No signature header provided")
         return False
     
     if not GITHUB_WEBHOOK_SECRET:
-        print("   ❌ GITHUB_WEBHOOK_SECRET not configured")
         return False
     
     try:
         hash_object = hmac.new(GITHUB_WEBHOOK_SECRET.encode('utf-8'), msg=payload_body, digestmod=hashlib.sha256)
         expected_signature = "sha256=" + hash_object.hexdigest()
-        
-        print(f"   - Expected signature: {expected_signature}")
-        print(f"   - Received signature: {signature_header}")
-        print(f"   - Signatures match: {hmac.compare_digest(expected_signature, signature_header)}")
-        
         return hmac.compare_digest(expected_signature, signature_header)
     except Exception as e:
-        print(f"   ❌ Error during signature verification: {e}")
+        print(f"Error during signature verification: {e}")
         return False
 
 def format_slack_message_for_release(event_data):
@@ -202,49 +188,27 @@ def format_slack_message_for_pr(event_data):
 def github_webhook():
     """Handle GitHub webhook events."""
     try:
-        print(f"🎯 GitHub Webhook Request Debug:")
-        print(f"   - Method: {request.method}")
-        print(f"   - Content-Type: {request.headers.get('Content-Type')}")
-        print(f"   - User-Agent: {request.headers.get('User-Agent')}")
-        
         # Get the signature from headers
         signature = request.headers.get('X-Hub-Signature-256')
-        print(f"   - X-Hub-Signature-256 header: {signature}")
-        
-        # Also check for the older signature format
-        old_signature = request.headers.get('X-Hub-Signature')
-        print(f"   - X-Hub-Signature header (old): {old_signature}")
         
         # Get the event type
         event_type = request.headers.get('X-GitHub-Event')
-        print(f"   - X-GitHub-Event: {event_type}")
-        
-        # Get delivery ID for tracking
-        delivery_id = request.headers.get('X-GitHub-Delivery')
-        print(f"   - X-GitHub-Delivery: {delivery_id}")
         
         # Get raw payload data for signature verification
         raw_payload = request.get_data()
         
         # Verify the payload came from GitHub
         if GITHUB_WEBHOOK_SECRET and not verify_github_signature(raw_payload, signature):
-            print(f"   ❌ Signature verification failed!")
             return jsonify({"error": "Invalid signature"}), 401
-        
-        print(f"   ✅ Signature verification passed!")
         
         # Handle different content types
         content_type = request.headers.get('Content-Type', '')
-        print(f"   📋 Processing payload with content-type: {content_type}")
         
         if 'application/json' in content_type:
             payload = request.get_json()
-            print(f"   ✅ JSON payload parsed successfully")
         elif 'application/x-www-form-urlencoded' in content_type:
-            print(f"   ⚠️  Form-encoded payload detected - GitHub should send JSON!")
             # GitHub sends form data with 'payload' field containing JSON
             form_data = request.get_data(as_text=True)
-            print(f"   📝 Form data: {form_data[:200]}...")
             
             # Parse form data
             from urllib.parse import parse_qs, unquote_plus
@@ -253,76 +217,50 @@ def github_webhook():
             if 'payload' in parsed_form:
                 payload_json = parsed_form['payload'][0]
                 payload = json.loads(unquote_plus(payload_json))
-                print(f"   ✅ Form payload extracted and parsed successfully")
             else:
-                print(f"   ❌ No 'payload' field found in form data")
                 return jsonify({"error": "Invalid form payload"}), 400
         else:
-            print(f"   ❌ Unsupported content type: {content_type}")
             return jsonify({"error": "Unsupported content type"}), 400
         
         if not payload:
-            print(f"   ❌ No payload received")
             return jsonify({"error": "No payload received"}), 400
-        
-        print(f"   ✅ Payload processed successfully")
         
         # Handle release events
         if event_type == 'release':
             action = payload.get('action')
-            print(f"   📦 Release event - Action: {action}")
-            if action in ['published', 'created', 'released']:
-                print(f"   ✅ Processing release action: {action}")
+            if action in ['released']:
                 message = format_slack_message_for_release(payload)
                 
                 # Send to Slack
                 try:
-                    print(f"   📤 Sending release notification to channel: {GITHUB_NOTIFICATIONS_CHANNEL}")
-                    response = app.client.chat_postMessage(
+                    app.client.chat_postMessage(
                         channel=GITHUB_NOTIFICATIONS_CHANNEL,
                         blocks=message['blocks']
                     )
-                    print(f"   ✅ Release notification sent successfully - ts: {response.get('ts')}")
                 except SlackApiError as e:
-                    print(f"   ❌ Error sending release notification to Slack: {e.response['error']}")
+                    print(f"Error sending release notification to Slack: {e.response['error']}")
                     return jsonify({"error": "Failed to send Slack notification"}), 500
-            else:
-                print(f"   ⏭️ Ignoring release action: {action}")
         
         # Handle pull request events
         elif event_type == 'pull_request':
             action = payload.get('action')
-            print(f"   🔀 Pull request event - Action: {action}")
             if action in ['opened', 'closed', 'merged']:
-                print(f"   ✅ Processing PR action: {action}")
                 message = format_slack_message_for_pr(payload)
                 
                 # Send to Slack
                 try:
-                    print(f"   📤 Sending PR notification to channel: {GITHUB_NOTIFICATIONS_CHANNEL}")
-                    response = app.client.chat_postMessage(
+                    app.client.chat_postMessage(
                         channel=GITHUB_NOTIFICATIONS_CHANNEL,
                         blocks=message['blocks']
                     )
-                    print(f"   ✅ PR notification sent successfully - ts: {response.get('ts')}")
                 except SlackApiError as e:
-                    print(f"   ❌ Error sending PR notification to Slack: {e.response['error']}")
+                    print(f"Error sending PR notification to Slack: {e.response['error']}")
                     return jsonify({"error": "Failed to send Slack notification"}), 500
-            else:
-                print(f"   ⏭️ Ignoring PR action: {action}")
         
-        else:
-            print(f"   ⏭️ Ignoring event type: {event_type}")
-        
-        print(f"   🎉 Webhook processed successfully")
         return jsonify({"status": "success"}), 200
         
     except Exception as e:
-        print(f"   💥 Unexpected error handling GitHub webhook:")
-        print(f"   - Error type: {type(e).__name__}")
-        print(f"   - Error message: {str(e)}")
-        import traceback
-        print(f"   - Traceback: {traceback.format_exc()}")
+        print(f"Error handling GitHub webhook: {e}")
         return jsonify({"error": "Internal server error"}), 500
 
 # listen fur user mentoining the slack app
