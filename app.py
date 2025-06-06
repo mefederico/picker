@@ -223,20 +223,49 @@ def github_webhook():
         delivery_id = request.headers.get('X-GitHub-Delivery')
         print(f"   - X-GitHub-Delivery: {delivery_id}")
         
+        # Get raw payload data for signature verification
+        raw_payload = request.get_data()
+        
         # Verify the payload came from GitHub
-        if GITHUB_WEBHOOK_SECRET and not verify_github_signature(request.get_data, signature):
+        if GITHUB_WEBHOOK_SECRET and not verify_github_signature(raw_payload, signature):
             print(f"   ❌ Signature verification failed!")
             return jsonify({"error": "Invalid signature"}), 401
         
         print(f"   ✅ Signature verification passed!")
         
-        payload = request.get_json()
+        # Handle different content types
+        content_type = request.headers.get('Content-Type', '')
+        print(f"   📋 Processing payload with content-type: {content_type}")
+        
+        if 'application/json' in content_type:
+            payload = request.get_json()
+            print(f"   ✅ JSON payload parsed successfully")
+        elif 'application/x-www-form-urlencoded' in content_type:
+            print(f"   ⚠️  Form-encoded payload detected - GitHub should send JSON!")
+            # GitHub sends form data with 'payload' field containing JSON
+            form_data = request.get_data(as_text=True)
+            print(f"   📝 Form data: {form_data[:200]}...")
+            
+            # Parse form data
+            from urllib.parse import parse_qs, unquote_plus
+            parsed_form = parse_qs(form_data)
+            
+            if 'payload' in parsed_form:
+                payload_json = parsed_form['payload'][0]
+                payload = json.loads(unquote_plus(payload_json))
+                print(f"   ✅ Form payload extracted and parsed successfully")
+            else:
+                print(f"   ❌ No 'payload' field found in form data")
+                return jsonify({"error": "Invalid form payload"}), 400
+        else:
+            print(f"   ❌ Unsupported content type: {content_type}")
+            return jsonify({"error": "Unsupported content type"}), 400
         
         if not payload:
-            print(f"   ❌ No JSON payload received")
+            print(f"   ❌ No payload received")
             return jsonify({"error": "No payload received"}), 400
         
-        print(f"   ✅ Payload received successfully")
+        print(f"   ✅ Payload processed successfully")
         
         # Handle release events
         if event_type == 'release':
