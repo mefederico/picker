@@ -3,3 +3,4 @@ slack-bolt==1.23.0
 slack-sdk==3.35.0
 python-dotenv==1.1.0
 psycopg2-binary==2.9.9
+requests==2.31.0

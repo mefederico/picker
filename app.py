@@ -8,6 +8,8 @@ from dotenv import load_dotenv, find_dotenv
 from db_manager import DatabaseManager
 import random
 import datetime
+import hmac
+import hashlib
 
 load_dotenv(find_dotenv())
 
@@ -17,12 +19,218 @@ SLACK_SIGNING_SECRET = os.getenv('SLACK_SIGNING_SECRET')
 SLACK_BOT_TOKEN = os.getenv('SLACK_BOT_TOKEN')
 SLACK_BOT_USER_ID = os.getenv('SLACK_BOT_USER_ID')
 PSQL_URL = os.getenv('DATABASE_URL')
+GITHUB_WEBHOOK_SECRET = os.getenv('GITHUB_WEBHOOK_SECRET')
+GITHUB_NOTIFICATIONS_CHANNEL = os.getenv('GITHUB_NOTIFICATIONS_CHANNEL', 'C04D5B9EXLZ')  # Default channel
 
 flask_app = Flask(__name__)
 app = App(token=SLACK_BOT_TOKEN, signing_secret=SLACK_SIGNING_SECRET)
 
-
 handler = SlackRequestHandler(app)
+
+def verify_github_signature(payload_body, signature_header):
+    """Verify that the payload was sent from GitHub by validating SHA256."""
+    if not signature_header:
+        return False
+    hash_object = hmac.new(GITHUB_WEBHOOK_SECRET.encode('utf-8'), msg=payload_body, digestmod=hashlib.sha256)
+    expected_signature = "sha256=" + hash_object.hexdigest()
+    return hmac.compare_digest(expected_signature, signature_header)
+
+def format_slack_message_for_release(event_data):
+    """Format a Slack message for GitHub release events."""
+    action = event_data.get('action')
+    release = event_data.get('release', {})
+    repository = event_data.get('repository', {})
+    
+    repo_name = repository.get('full_name', 'Unknown Repository')
+    release_name = release.get('name') or release.get('tag_name', 'Unknown Release')
+    release_url = release.get('html_url', '')
+    release_body = release.get('body', '')
+    is_prerelease = release.get('prerelease', False)
+    is_draft = release.get('draft', False)
+    
+    # Determine emoji and message based on release type
+    if is_draft:
+        emoji = "📝"
+        status = "Draft Release"
+    elif is_prerelease:
+        emoji = "🚧"
+        status = "Pre-release"
+    else:
+        emoji = "🚀"
+        status = "Release"
+    
+    message = {
+        "blocks": [
+            {
+                "type": "header",
+                "text": {
+                    "type": "plain_text",
+                    "text": f"{emoji} {status} {action.title()}"
+                }
+            },
+            {
+                "type": "section",
+                "fields": [
+                    {
+                        "type": "mrkdwn",
+                        "text": f"*Repository:*\n{repo_name}"
+                    },
+                    {
+                        "type": "mrkdwn",
+                        "text": f"*Release:*\n<{release_url}|{release_name}>"
+                    }
+                ]
+            }
+        ]
+    }
+    
+    # Add release notes if available
+    if release_body:
+        # Truncate if too long
+        truncated_body = release_body[:500] + "..." if len(release_body) > 500 else release_body
+        message["blocks"].append({
+            "type": "section",
+            "text": {
+                "type": "mrkdwn",
+                "text": f"*Release Notes:*\n```{truncated_body}```"
+            }
+        })
+    
+    return message
+
+def format_slack_message_for_pr(event_data):
+    """Format a Slack message for GitHub PR events."""
+    action = event_data.get('action')
+    pull_request = event_data.get('pull_request', {})
+    repository = event_data.get('repository', {})
+    
+    repo_name = repository.get('full_name', 'Unknown Repository')
+    pr_title = pull_request.get('title', 'Unknown PR')
+    pr_url = pull_request.get('html_url', '')
+    pr_number = pull_request.get('number', 0)
+    pr_user = pull_request.get('user', {}).get('login', 'Unknown User')
+    pr_body = pull_request.get('body', '')
+    base_branch = pull_request.get('base', {}).get('ref', 'main')
+    head_branch = pull_request.get('head', {}).get('ref', 'unknown')
+    
+    # Check if this is a release branch
+    is_release_branch = 'release' in head_branch.lower() or 'release' in base_branch.lower()
+    
+    emoji = "🔀" if not is_release_branch else "🚀"
+    branch_info = f"from `{head_branch}` to `{base_branch}`"
+    
+    message = {
+        "blocks": [
+            {
+                "type": "header",
+                "text": {
+                    "type": "plain_text",
+                    "text": f"{emoji} Pull Request {action.title()}"
+                }
+            },
+            {
+                "type": "section",
+                "fields": [
+                    {
+                        "type": "mrkdwn",
+                        "text": f"*Repository:*\n{repo_name}"
+                    },
+                    {
+                        "type": "mrkdwn",
+                        "text": f"*PR:*\n<{pr_url}|#{pr_number}: {pr_title}>"
+                    },
+                    {
+                        "type": "mrkdwn",
+                        "text": f"*Author:*\n{pr_user}"
+                    },
+                    {
+                        "type": "mrkdwn",
+                        "text": f"*Branches:*\n{branch_info}"
+                    }
+                ]
+            }
+        ]
+    }
+    
+    # Add special notification for release branches
+    if is_release_branch:
+        message["blocks"].append({
+            "type": "section",
+            "text": {
+                "type": "mrkdwn",
+                "text": "🚨 *This is a release branch PR!*"
+            }
+        })
+    
+    # Add PR description if available
+    if pr_body:
+        # Truncate if too long
+        truncated_body = pr_body[:300] + "..." if len(pr_body) > 300 else pr_body
+        message["blocks"].append({
+            "type": "section",
+            "text": {
+                "type": "mrkdwn",
+                "text": f"*Description:*\n```{truncated_body}```"
+            }
+        })
+    
+    return message
+
+@flask_app.route("/github/webhook", methods=["POST"])
+def github_webhook():
+    """Handle GitHub webhook events."""
+    try:
+        # Get the signature from headers
+        signature = request.headers.get('X-Hub-Signature-256')
+        
+        # Verify the payload came from GitHub
+        if GITHUB_WEBHOOK_SECRET and not verify_github_signature(request.data, signature):
+            return jsonify({"error": "Invalid signature"}), 401
+        
+        # Get the event type
+        event_type = request.headers.get('X-GitHub-Event')
+        payload = request.get_json()
+        
+        if not payload:
+            return jsonify({"error": "No payload received"}), 400
+        
+        # Handle release events
+        if event_type == 'release':
+            action = payload.get('action')
+            if action in ['published', 'created', 'released']:
+                message = format_slack_message_for_release(payload)
+                
+                # Send to Slack
+                try:
+                    app.client.chat_postMessage(
+                        channel=GITHUB_NOTIFICATIONS_CHANNEL,
+                        blocks=message['blocks']
+                    )
+                except SlackApiError as e:
+                    print(f"Error sending release notification to Slack: {e.response['error']}")
+                    return jsonify({"error": "Failed to send Slack notification"}), 500
+        
+        # Handle pull request events
+        elif event_type == 'pull_request':
+            action = payload.get('action')
+            if action in ['opened', 'closed', 'merged']:
+                message = format_slack_message_for_pr(payload)
+                
+                # Send to Slack
+                try:
+                    app.client.chat_postMessage(
+                        channel=GITHUB_NOTIFICATIONS_CHANNEL,
+                        blocks=message['blocks']
+                    )
+                except SlackApiError as e:
+                    print(f"Error sending PR notification to Slack: {e.response['error']}")
+                    return jsonify({"error": "Failed to send Slack notification"}), 500
+        
+        return jsonify({"status": "success"}), 200
+        
+    except Exception as e:
+        print(f"Error handling GitHub webhook: {e}")
+        return jsonify({"error": "Internal server error"}), 500
 
 # listen fur user mentoining the slack app
 @app.event("app_mention")
@@ -37,6 +245,17 @@ def handle_message_events(body, logger):
 @flask_app.route("/slack/events", methods=["POST"])
 def slack_events():
     return handler.handle(request)
+
+@flask_app.route("/github/webhook/test", methods=["GET"])
+def github_webhook_test():
+    """Test endpoint to verify GitHub webhook setup."""
+    return jsonify({
+        "status": "GitHub webhook endpoint is active",
+        "webhook_url": "/github/webhook",
+        "supported_events": ["release", "pull_request"],
+        "webhook_secret_configured": bool(GITHUB_WEBHOOK_SECRET),
+        "notifications_channel": GITHUB_NOTIFICATIONS_CHANNEL
+    }), 200
 
 
 
