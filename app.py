@@ -224,7 +224,7 @@ def github_webhook():
         print(f"   - X-GitHub-Delivery: {delivery_id}")
         
         # Verify the payload came from GitHub
-        if GITHUB_WEBHOOK_SECRET and not verify_github_signature(request.data, signature):
+        if GITHUB_WEBHOOK_SECRET and not verify_github_signature(request.get_data, signature):
             print(f"   ❌ Signature verification failed!")
             return jsonify({"error": "Invalid signature"}), 401
         
